@@ -7,6 +7,7 @@ import pandas as pd
 import lp_helper as lph
 from pyspark.sql.functions import explode, col
 import argparse
+import json
 
 
 class create_lp_image(object):
@@ -24,9 +25,8 @@ class create_lp_image(object):
         assert game > ' ','Games cannot be null.Choices are ce or l2dl'
         
         
-    def read_lp_log_as_df(self):
+    def read_lp_log_as_df(self,incoming_path):
         try:
-            incoming_path=cfg.lp_source[self.game] + 'dt=' + lph.get_date_string(self.dt) + '/'
             self.lp_sessions = self.sqlcontext.read.json(incoming_path)
             return self.lp_sessions.count()
         except Exception as e:
@@ -36,7 +36,7 @@ class create_lp_image(object):
     def initiate_the_header_data(self):
         self.create_sessions_with_states()
         self.create_sessions_with_no_states()
-        adf = get_lp_image.flatten_session_with_states
+        adf = self.flatten_session_with_states()
         self.create_states_with_no_events(adf)
         self.create_states_with_events(adf)
         self.flatten_states_with_events()
@@ -65,7 +65,11 @@ class create_lp_image(object):
                 
         
     def flatten_states_with_events(self):
-        self.stateswithevents_flattened = self.states_with_events.select('sessionId','deviceId','city','client','country','lat','lon','priorEvents','priorSessions','priorTimeSpentInApp','region','sdkVersion','deviceModel','duration','firstRun','isDeveloper','isSession','locale','systemName','systemVersion','time','timezone','userId','userBucket',col('userAttributes.adid').alias('adid'),col('states.stateId').alias('stateid'),col('states.name').alias('statename'),explode("states.events").alias('events'))
+        try:
+            self.stateswithevents_flattened = self.states_with_events.select('sessionId','deviceId','city','client','country','lat','lon','priorEvents','priorSessions','priorTimeSpentInApp','region','sdkVersion','deviceModel','duration','firstRun','isDeveloper','isSession','locale','systemName','systemVersion','time','timezone','userId','userBucket',col('userAttributes.adid').alias('adid'),col('states.stateid').alias('stateid'),col('states.events.name').alias('statename'),explode("states.events").alias('events'))
+        except Exception as e:
+            print('Could not create the states with events due to {}'.format(e))
+            return self.sqlcontext.createDataFrame(self.sc.emptyRDD(), cfg.schema)
         
     def create_header_data(self):
         try:
@@ -73,7 +77,7 @@ class create_lp_image(object):
             _ = self.states_with_no_events.registerTempTable("states_with_no_events")
             _ = self.stateswithevents_flattened.registerTempTable("states_with_events")
 
-            return header_df= self.sqlcontext.sql(cfg.header_sql)
+            return self.sqlcontext.sql(cfg.header_sql)
         except Exception as e:
             print('Could not create the header file due to {}'.format(e))
             return self.sqlcontext.createDataFrame(self.sc.emptyRDD(), cfg.schema)
@@ -92,7 +96,7 @@ class create_lp_image(object):
          
     def create_df_for_states_with_no_events(self):
         try:
-            return sqlcontext.sql(cfg.states_with_no_events)
+            return self.sqlcontext.sql(cfg.states_with_no_events)
         except Exception as e:
             print('Could not create the states with no events due to {}'.format(e))
             return self.sqlcontext.createDataFrame(self.sc.emptyRDD(), cfg.schema)
@@ -116,7 +120,8 @@ def main():
     startDt,endDt = args.startDt, args.endDt
     while startDt <= endDt:
         get_lp_image = create_lp_image(startDt,args.games)
-        if get_lp_image.read_lp_log_as_df > 0:
+        incoming_path=cfg.lp_source[args.game] + 'dt=' + lph.get_date_string(startDt) + '/'
+        if get_lp_image.read_lp_log_as_df(incoming_path) > 0:
             header_df = get_lp_image.initiate_the_header_data()
             if header_df.count() > 0:
                 if get_lp_image.flush_df_data_into_files(header_df,'header'):
