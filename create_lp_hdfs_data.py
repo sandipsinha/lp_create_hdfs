@@ -10,6 +10,7 @@ import argparse
 import json
 
 
+
 class create_lp_image(object):
     
     def __init__(self,dts,game):
@@ -111,6 +112,15 @@ class create_lp_image(object):
             print('Could not create the event detail dataframe due to {}'.format(e))
             return self.sqlcontext.createDataFrame(self.sc.emptyRDD(), cfg.schema)
 
+    def execute(self,method,*args,**kargs):
+        method_maps={
+           'header':self.initiate_the_header_data,
+           'states':self.create_df_for_states_with_no_events,
+           'events':self.create_df_with_event_details,
+           'flush': self.flush_df_data_into_files
+            }
+            return method_maps[method](*args,**kargs)
+
 def main():
     parser = argparse.ArgumentParser(description='Get parameters for Leanplum Base table calc process.')
     parser.add_argument("startDt", help="Indicates the starting Date",type=valid_date)
@@ -122,21 +132,14 @@ def main():
         get_lp_image = create_lp_image(startDt,args.games)
         incoming_path=cfg.lp_source[args.game] + 'dt=' + lph.get_date_string(startDt) + '/'
         if get_lp_image.read_lp_log_as_df(incoming_path) > 0:
-            header_df = get_lp_image.initiate_the_header_data()
-            if header_df.count() > 0:
-                if get_lp_image.flush_df_data_into_files(header_df,'header'):
-                    states_df = get_lp_image.create_df_for_states_with_no_events()
-                    if states_df.count() > 0:
-                        if get_lp_image.flush_df_data_into_files(states_df,'states'):
-                            events_df = get_lp_image.create_df_with_event_details()
-                            if events_df.count() > 0:
-                                if get_lp_image.flush_df_data_into_files(events_df,'events'):
-                                    print('Successfully created dataframe for the given dates {}'.format(startDt))
-                            
-                    
-        startDt = (datetime.strptime(startDt,'%Y-%m-%d') + timedelta(days=1)).strftime('%Y-%m-%d')
-    
+            for steps in cfg.method_steps:
+                resp_df = get_lp_image.execute(steps)
+                if resp_df.count() > 0:
+                    if not get_lp_image.execute('flush',resp_df,steps):
+                        print('Could not create the files on s3')
+            print('Successfully created dataframe for the given dates {}'.format(startDt))
 
+        startDt = (datetime.strptime(startDt,'%Y-%m-%d') + timedelta(days=1)).strftime('%Y-%m-%d')
 
 
 
